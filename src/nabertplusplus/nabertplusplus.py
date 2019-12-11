@@ -44,7 +44,7 @@ class NumericallyAugmentedBERTPlusPlus(Model):
 
         if answering_abilities is None:
             self.answering_abilities = ["passage_span_extraction", "question_span_extraction",
-                                        "arithmetic", "counting", "multiple_spans"]
+                                        "arithmetic", "counting", "multiple_spans", "unit_span_extraction"]
         else:
             self.answering_abilities = answering_abilities
 
@@ -78,6 +78,11 @@ class NumericallyAugmentedBERTPlusPlus(Model):
             self._question_span_extraction_index = self.answering_abilities.index("question_span_extraction")
             self._question_span_start_predictor = self.ff(2 * bert_dim, bert_dim, 1)
             self._question_span_end_predictor = self.ff(2 * bert_dim, bert_dim, 1)
+
+        if "unit_span_extraction" in self.answering_abilities:
+            self._unit_span_extraction_index = self.answering_abilities.index("unit_span_extraction")
+            self._unit_span_start_predictor = self.ff(2 * bert_dim, bert_dim, 1)
+            self._unit_span_end_predictor = self.ff(2 * bert_dim, bert_dim, 1)
 
         if "arithmetic" in self.answering_abilities:
             self.special_numbers = special_numbers
@@ -161,6 +166,7 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                 answer_as_question_spans: torch.LongTensor = None,
                 answer_as_expressions: torch.LongTensor = None,
                 answer_as_expressions_extra: torch.LongTensor = None,
+                answer_as_unit_spans: torch.LongTensor = None,
                 answer_as_counts: torch.LongTensor = None,
                 answer_as_text_to_disjoint_bios: torch.LongTensor = None,
                 answer_as_list_of_bios: torch.LongTensor = None,
@@ -230,6 +236,10 @@ class NumericallyAugmentedBERTPlusPlus(Model):
             question_span_start_log_probs, question_span_end_log_probs, best_question_span = \
                 self._question_span_module(passage_vector, question_out, question_mask)
 
+        if "unit_span_extraction" in self.answering_abilities:
+            unit_span_start_log_probs, unit_span_end_log_probs, best_unit_span = \
+                self._unit_span_module(passage_vector, question_out, question_mask)
+
         if "multiple_spans" in self.answering_abilities:
             if self.multispan_head_name == "flexible_loss":
                 multispan_log_probs, multispan_logits = self._multispan_module(passage_out, seq_mask=multispan_mask)
@@ -298,10 +308,19 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                                                         is_bio_mask,
                                                         logits=multispan_logits)
                     log_marginal_likelihood_list.append(log_marginal_likelihood_for_multispan)
+                elif "unit_span_extraction" in self.answering_abilities:
+                    log_marginal_likelihood_for_unit_span = \
+                    self._question_span_log_likelihood(answer_as_unit_spans,
+                                                unit_span_start_log_probs,
+                                                unit_span_end_log_probs)
+                    ## if 
+                    ##     log_marginal_likelihood_for_unit_span = -1.0000e+07
+                    log_marginal_likelihood_list.append(log_marginal_likelihood_for_unit_span)
                 else:
                     raise ValueError(f"Unsupported answering ability: {answering_ability}")
 
             if len(self.answering_abilities) > 1:
+                # import pdb; pdb.set_trace()
                 # Add the ability probabilities if there are more than one abilities
                 all_log_marginal_likelihoods = torch.stack(log_marginal_likelihood_list, dim=-1)
                 all_log_marginal_likelihoods = all_log_marginal_likelihoods + answer_ability_log_probs
@@ -346,6 +365,7 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                         answer_json["answer_type"] = "question_span"
                         answer_json["value"], answer_json["spans"] = \
                             self._span_prediction(qp_tokens, best_question_span[i], p_text, q_text, 'q')
+                        # import pdb; pdb.set_trace()
                     elif predicted_ability_str == "arithmetic":  # plus_minus combination answer
                         answer_json["answer_type"] = "arithmetic"
                         original_numbers = metadata[i]['original_numbers']
@@ -355,7 +375,6 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                         answer_json["answer_type"] = "count"
                         answer_json["value"], answer_json["count"] = \
                             self._count_prediction(best_count_number[i])
-
                     elif predicted_ability_str == "multiple_spans":
                         answer_json["answer_type"] = "multiple_spans"
                         if self.multispan_head_name == "flexible_loss":
@@ -375,9 +394,18 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                         if len(answer_json["value"]) == 0:
                             best_answer_ability[i] = top_two_answer_abilities.indices[i][1]
                             continue
+                    elif predicted_ability_str == "unit_span_extraction":
+                        '''
+                            Try answer_type = question_span for later metricing
+                        '''
+                        answer_json["answer_type"] = "question_span"
+                        answer_json["value"], answer_json["spans"] = \
+                            self._span_prediction(qp_tokens, best_unit_span[i], p_text, q_text, 'q')
+                        ## import pdb; pdb.set_trace()
                     else:
                         raise ValueError(f"Unsupported answer ability: {predicted_ability_str}")
                     
+                    # import pdb; pdb.set_trace()
                     maximizing_ground_truth = None
                     em, f1 = None, None
                     answer_annotations = metadata[i].get('answer_annotations', [])
@@ -476,6 +504,29 @@ class NumericallyAugmentedBERTPlusPlus(Model):
         # Shape: (batch_size, 2)
         best_question_span = get_best_span(question_span_start_logits, question_span_end_logits)
         return question_span_start_log_probs, question_span_end_log_probs, best_question_span
+
+    def _unit_span_module(self, passage_vector, question_out, question_mask):
+        # Shape: (batch_size, question_length)
+        encoded_question_for_span_prediction = \
+            torch.cat([question_out,
+                       passage_vector.unsqueeze(1).repeat(1, question_out.size(1), 1)], -1)
+        unit_span_start_logits = \
+            self._unit_span_start_predictor(encoded_question_for_span_prediction).squeeze(-1)
+        # Shape: (batch_size, question_length)
+        unit_span_end_logits = \
+            self._unit_span_end_predictor(encoded_question_for_span_prediction).squeeze(-1)
+        unit_span_start_log_probs = util.masked_log_softmax(unit_span_start_logits, question_mask)
+        unit_span_end_log_probs = util.masked_log_softmax(unit_span_end_logits, question_mask)
+
+        # Info about the best unit span prediction
+        unit_span_start_logits = \
+            util.replace_masked_values(unit_span_start_logits, question_mask, -1e7)
+        unit_span_end_logits = \
+            util.replace_masked_values(unit_span_end_logits, question_mask, -1e7)
+
+        # Shape: (batch_size, 2)
+        best_unit_span = get_best_span(unit_span_start_logits, unit_span_end_logits)
+        return unit_span_start_log_probs, unit_span_end_log_probs, best_unit_span
 
     def _question_span_log_likelihood(self, 
                                       answer_as_question_spans, 

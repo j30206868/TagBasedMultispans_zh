@@ -58,7 +58,14 @@ class NaBertDropReader(DatasetReader):
         self.max_numbers_expression = max_numbers_expression
         self.answer_types = answer_types or ALL_ANSWER_TYPES
         self.bio_types = bio_types or [MULTIPLE_SPAN]
-        self.use_validated = use_validated
+        
+        '''
+            Not using validated
+        '''
+        self.use_validated = False
+        ### self.use_validated = use_validated
+        
+        
         self.wordpiece_numbers = wordpiece_numbers
         self.number_tokenizer = number_tokenizer or WordTokenizer()
         self.max_depth = max_depth
@@ -189,6 +196,17 @@ class NaBertDropReader(DatasetReader):
                          answer_annotations: List[Dict] = None,
                          specific_answer_type: str = None) -> Optional[Instance]:
         # Tokenize question and passage
+        '''
+            ### all_number_in_qp_tokens = [qp_tokens[idx] for idx in number_indices]
+
+            unit_tokens = self.tokenizer.tokenize(answer_annotations[0]['unit'])
+
+            valid_unit_spans = DropReader.find_valid_spans(question_tokens, [answer_annotations[0]['unit']])
+            assert len(valid_unit_spans) == 1
+            ### index + 1 since there is an CLS token at the front
+            valid_unit_spans = [(valid_unit_spans[0][0]+1, valid_unit_spans[0][1]+1)]
+        '''
+
         question_tokens = self.tokenizer.tokenize(question_text)
         question_tokens = fill_token_indices(question_tokens, question_text, self._uncased, self.basic_tokenizer)
 
@@ -266,7 +284,16 @@ class NaBertDropReader(DatasetReader):
             metadata["answer_annotations"] = answer_annotations
             metadata["answer_texts"] = answer_texts
             metadata["answer_tokens"] = tokenized_answer_texts
-            
+        
+            # Find unit text in question
+            # import pdb; pdb.set_trace()
+            if answer_annotations[0]['unit'] != '': 
+                valid_unit_spans = DropReader.find_valid_spans(question_tokens, [answer_annotations[0]['unit']])
+                ## assert len(valid_unit_spans) <= 1
+                ### index + 1 since there is an CLS token at the front
+                valid_unit_spans = [(unit_span[0]+1, unit_span[1]+1) for unit_span in valid_unit_spans]
+            else:
+                valid_unit_spans = []
             # Find answer text in question and passage
             valid_question_spans = DropReader.find_valid_spans(question_tokens, tokenized_answer_texts)
             for span_ind, span in enumerate(valid_question_spans):
@@ -336,7 +363,9 @@ class NaBertDropReader(DatasetReader):
             answer_info = {"answer_passage_spans": valid_passage_spans,
                            "answer_question_spans": valid_question_spans,
                            "expressions": valid_expressions,
-                           "counts": valid_counts}
+                           "counts": valid_counts,
+                           "unit": valid_unit_spans}
+
             metadata["answer_info"] = answer_info
         
             # Add answer fields
@@ -369,11 +398,26 @@ class NaBertDropReader(DatasetReader):
             if self.extra_numbers:
                 fields["answer_as_expressions_extra"] = ListField(extra_signs_field)
 
+
+            '''
+                Add unit_field
+            '''
+            ## if len(valid_unit_spans) > 1:
+            ##    import pdb; pdb.set_trace()
+            unit_span_fields: List[Field] = []
+            unit_span_fields: List[Field] = [SpanField(span[0], span[1], qp_field) for span in valid_unit_spans]
+            if not unit_span_fields:
+                unit_span_fields.append(SpanField(-1, -1, qp_field))
+                
+            fields["answer_as_unit_spans"] = ListField(unit_span_fields)
+
             count_fields: List[Field] = [LabelField(count_label, skip_indexing=True) for count_label in valid_counts]
             if not count_fields:
                 count_fields.append(LabelField(-1, skip_indexing=True))
             fields["answer_as_counts"] = ListField(count_fields)
             
+            
+
             no_answer_bios = SequenceLabelField([0] * len(qp_tokens), sequence_field=qp_field)
             if (specific_answer_type in self.bio_types) and (len(valid_passage_spans) > 0 or len(valid_question_spans) > 0):
                 
