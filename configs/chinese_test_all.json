@@ -3,12 +3,12 @@
         "type": "nabert++",
         "tokenizer": {
             "type": "bert-drop",
-            "pretrained_model": "./chinese_wwm_pytorch/vocab.txt"
+            "pretrained_model": "./chinese_roberta_wwm_ext_pytorch/vocab.txt"
         },
         "token_indexers": {
           "tokens": {
             "type": "bert-drop",
-            "pretrained_model": "./chinese_wwm_pytorch/vocab.txt"
+            "pretrained_model": "./chinese_roberta_wwm_ext_pytorch/vocab.txt"
           }
         },
         "bio_types": ["multiple_span", "single_span", "number", "date"],
@@ -21,12 +21,12 @@
         "type": "nabert++",
         "tokenizer": {
             "type": "bert-drop",
-            "pretrained_model": "./chinese_wwm_pytorch/vocab.txt"
+            "pretrained_model": "./chinese_roberta_wwm_ext_pytorch/vocab.txt"
         },
         "token_indexers": {
           "tokens": {
             "type": "bert-drop",
-            "pretrained_model": "./chinese_wwm_pytorch/vocab.txt"
+            "pretrained_model": "./chinese_roberta_wwm_ext_pytorch/vocab.txt"
           }
         },
         "bio_types": ["multiple_span", "single_span", "number", "date"],
@@ -37,11 +37,11 @@
     },
     "iterator": {
         "type": "basic",
-        "batch_size": 6
+        "batch_size": 4
     },
     "model": {
         "type": "nabert++",
-        "bert_pretrained_model": "./chinese_wwm_pytorch/",
+        "bert_pretrained_model": "./chinese_roberta_wwm_ext_pytorch/",
         "dropout_prob": 0.1,
         "special_numbers": [ 100, 1],
         "answering_abilities": ["passage_span_extraction", "arithmetic", "counting", "multiple_spans", "yesno"]
