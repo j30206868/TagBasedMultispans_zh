@@ -290,7 +290,7 @@ class NaBertDropReader(DatasetReader):
             # Find unit text in question
             # import pdb; pdb.set_trace()
             if answer_annotations[0]['unit'] != '': 
-                print('answer_annotations[0][unit] = '+str(answer_annotations[0]['unit']))
+                # print('answer_annotations[0][unit] = '+str(answer_annotations[0]['unit']))
                 valid_unit_spans = DropReader.find_valid_spans(question_tokens, [answer_annotations[0]['unit']])
                 ## assert len(valid_unit_spans) <= 1
                 ### index + 1 since there is an CLS token at the front

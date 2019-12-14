@@ -44,7 +44,7 @@ class NumericallyAugmentedBERTPlusPlus(Model):
 
         if answering_abilities is None:
             self.answering_abilities = ["passage_span_extraction", "question_span_extraction",
-                                        "arithmetic", "counting", "multiple_spans", "unit_span_extraction"]
+                                        "arithmetic", "counting", "multiple_spans"]
         else:
             self.answering_abilities = answering_abilities
 
@@ -79,8 +79,7 @@ class NumericallyAugmentedBERTPlusPlus(Model):
             self._question_span_start_predictor = self.ff(2 * bert_dim, bert_dim, 1)
             self._question_span_end_predictor = self.ff(2 * bert_dim, bert_dim, 1)
 
-        if "unit_span_extraction" in self.answering_abilities:
-            self._unit_span_extraction_index = self.answering_abilities.index("unit_span_extraction")
+        if "arithmetic" in self.answering_abilities or "counting" in self.answering_abilities:
             self._unit_span_start_predictor = self.ff(2 * bert_dim, bert_dim, 1)
             self._unit_span_end_predictor = self.ff(2 * bert_dim, bert_dim, 1)
 
@@ -236,7 +235,7 @@ class NumericallyAugmentedBERTPlusPlus(Model):
             question_span_start_log_probs, question_span_end_log_probs, best_question_span = \
                 self._question_span_module(passage_vector, question_out, question_mask)
 
-        if "unit_span_extraction" in self.answering_abilities:
+        if "arithmetic" in self.answering_abilities or "counting" in self.answering_abilities:
             unit_span_start_log_probs, unit_span_end_log_probs, best_unit_span = \
                 self._unit_span_module(passage_vector, question_out, question_mask)
 
@@ -260,6 +259,13 @@ class NumericallyAugmentedBERTPlusPlus(Model):
 
             log_marginal_likelihood_list = []
 
+            ###
+            log_marginal_likelihood_for_unit_span = \
+                    self._question_span_log_likelihood(answer_as_unit_spans,
+                                                unit_span_start_log_probs,
+                                                unit_span_end_log_probs)
+            ###
+
             for answering_ability in self.answering_abilities:
                 if answering_ability == "passage_span_extraction":
                     log_marginal_likelihood_for_passage_span = \
@@ -281,13 +287,13 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                                                                 number_sign_log_probs,
                                                                 number_mask, 
                                                                 answer_as_expressions_extra)
-                    log_marginal_likelihood_list.append(log_marginal_likelihood_for_arithmetic)
+                    log_marginal_likelihood_list.append(log_marginal_likelihood_for_arithmetic + log_marginal_likelihood_for_unit_span*0.5)
 
                 elif answering_ability == "counting":
                     log_marginal_likelihood_for_count = \
                         self._count_log_likelihood(answer_as_counts, 
                                                    count_number_log_probs)
-                    log_marginal_likelihood_list.append(log_marginal_likelihood_for_count)
+                    log_marginal_likelihood_list.append(log_marginal_likelihood_for_count + log_marginal_likelihood_for_unit_span*0.5)
 
                 elif answering_ability == "multiple_spans":
                     if self.multispan_head_name == "flexible_loss":
@@ -308,14 +314,6 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                                                         is_bio_mask,
                                                         logits=multispan_logits)
                     log_marginal_likelihood_list.append(log_marginal_likelihood_for_multispan)
-                elif "unit_span_extraction" in self.answering_abilities:
-                    log_marginal_likelihood_for_unit_span = \
-                    self._question_span_log_likelihood(answer_as_unit_spans,
-                                                unit_span_start_log_probs,
-                                                unit_span_end_log_probs)
-                    ## if 
-                    ##     log_marginal_likelihood_for_unit_span = -1.0000e+07
-                    log_marginal_likelihood_list.append(log_marginal_likelihood_for_unit_span)
                 else:
                     raise ValueError(f"Unsupported answering ability: {answering_ability}")
 
@@ -357,6 +355,12 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                     q_text = metadata[i]['original_question']
                     p_text = metadata[i]['original_passage']
                     qp_tokens = metadata[i]['question_passage_tokens']
+
+                    ###
+                    answer_json["unit_value"], answer_json["unit_spans"] = \
+                            self._span_prediction(qp_tokens, best_unit_span[i], p_text, q_text, 'q')
+                    ###
+
                     if predicted_ability_str == "passage_span_extraction":
                         answer_json["answer_type"] = "passage_span"
                         answer_json["value"], answer_json["spans"] = \
@@ -371,10 +375,12 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                         original_numbers = metadata[i]['original_numbers']
                         answer_json["value"], answer_json["numbers"] = \
                             self._base_arithmetic_prediction(original_numbers, number_indices[i], best_signs_for_numbers[i])
+                        answer_json["value"] = answer_json["value"]+answer_json["unit_value"]
                     elif predicted_ability_str == "counting":
                         answer_json["answer_type"] = "count"
                         answer_json["value"], answer_json["count"] = \
                             self._count_prediction(best_count_number[i])
+                        answer_json["value"] = answer_json["value"]+answer_json["unit_value"]
                     elif predicted_ability_str == "multiple_spans":
                         answer_json["answer_type"] = "multiple_spans"
                         if self.multispan_head_name == "flexible_loss":
@@ -394,14 +400,6 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                         if len(answer_json["value"]) == 0:
                             best_answer_ability[i] = top_two_answer_abilities.indices[i][1]
                             continue
-                    elif predicted_ability_str == "unit_span_extraction":
-                        '''
-                            Try answer_type = question_span for later metricing
-                        '''
-                        answer_json["answer_type"] = "question_span"
-                        answer_json["value"], answer_json["spans"] = \
-                            self._span_prediction(qp_tokens, best_unit_span[i], p_text, q_text, 'q')
-                        ## import pdb; pdb.set_trace()
                     else:
                         raise ValueError(f"Unsupported answer ability: {predicted_ability_str}")
                     
@@ -409,7 +407,13 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                     maximizing_ground_truth = None
                     em, f1 = None, None
                     answer_annotations = metadata[i].get('answer_annotations', [])
+
+                    def addunit2number(answer_annotations):
+                        for answer_annotation in answer_annotations:
+                            answer_annotation['number']+=answer_annotation['unit']
+
                     if answer_annotations:
+                        addunit2number(answer_annotations)
                         (em, f1), maximizing_ground_truth = self._drop_metrics.call(answer_json["value"], answer_annotations, predicted_ability_str)
 
                     if not self.training:
