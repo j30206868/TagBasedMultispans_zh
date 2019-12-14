@@ -83,7 +83,7 @@ class NaBertDropReader(DatasetReader):
                                  '(%s - %s) / %s',
                                  '%s * %s / %s',]
         if custom_word_to_num:
-            self.word_to_num = get_number_from_word
+            self.word_to_num = get_number_from_word_zh
         else:
             self.word_to_num = DropReader.convert_word_to_number
 
@@ -142,7 +142,8 @@ class NaBertDropReader(DatasetReader):
                     number_len.append(num_wordpieces)
                 passage_tokens += wordpieces
                 curr_index += num_wordpieces
-            
+            # if len(number_indices) == 0:
+            #     import pdb; pdb.set_trace()
             passage_tokens = fill_token_indices(passage_tokens, passage_text, self._uncased, self.basic_tokenizer, word_tokens)
 
             # Process questions from this passage
@@ -220,8 +221,9 @@ class NaBertDropReader(DatasetReader):
             qp_tokens = qp_tokens[:self.max_pieces - 1]
             passage_tokens = passage_tokens[:self.max_pieces - qlen - 3]
             plen = len(passage_tokens)
-            number_indices, number_len, numbers_in_passage = \
-                clipped_passage_num(number_indices, number_len, numbers_in_passage, plen)
+            if len(number_indices) > 0:
+                number_indices, number_len, numbers_in_passage = \
+                    clipped_passage_num(number_indices, number_len, numbers_in_passage, plen)
             max_passage_length = token_to_span(passage_tokens[-1])[1] if plen > 0 else 0
         
         qp_tokens += [Token('[SEP]')]
@@ -278,7 +280,7 @@ class NaBertDropReader(DatasetReader):
             for answer_text in answer_texts:
                 answer_tokens = self.tokenizer.tokenize(answer_text)
                 tokenized_answer_text = ' '.join(token.text for token in answer_tokens)
-                if tokenized_answer_text not in tokenized_answer_texts:
+                if tokenized_answer_text not in tokenized_answer_texts and tokenized_answer_text != '':
                     tokenized_answer_texts.append(tokenized_answer_text)
 
             metadata["answer_annotations"] = answer_annotations
@@ -288,6 +290,7 @@ class NaBertDropReader(DatasetReader):
             # Find unit text in question
             # import pdb; pdb.set_trace()
             if answer_annotations[0]['unit'] != '': 
+                print('answer_annotations[0][unit] = '+str(answer_annotations[0]['unit']))
                 valid_unit_spans = DropReader.find_valid_spans(question_tokens, [answer_annotations[0]['unit']])
                 ## assert len(valid_unit_spans) <= 1
                 ### index + 1 since there is an CLS token at the front
@@ -295,6 +298,8 @@ class NaBertDropReader(DatasetReader):
             else:
                 valid_unit_spans = []
             # Find answer text in question and passage
+            # if len(tokenized_answer_texts)==1 and tokenized_answer_texts[0] == '':
+            #     import pdb; pdb.set_trace()
             valid_question_spans = DropReader.find_valid_spans(question_tokens, tokenized_answer_texts)
             for span_ind, span in enumerate(valid_question_spans):
                 valid_question_spans[span_ind] = (span[0] + 1, span[1] + 1)
@@ -333,7 +338,8 @@ class NaBertDropReader(DatasetReader):
                         DropReader.find_valid_add_sub_expressions(self.extra_numbers + numbers_in_passage,
                                                                   target_numbers,
                                                                   self.max_numbers_expression)
-
+                if len(target_numbers) == 0:
+                    import pdb; pdb.set_trace()
                 if self.discard_impossible_number_questions:
                     # The train set was verified to have all of its target_numbers lists of length 1.
                     if (answer_type == "number" and

@@ -35,7 +35,7 @@ def get_answer_type(answer):
         if len(answer['spans']) == 1:
             return SINGLE_SPAN
         return MULTIPLE_SPAN
-    elif any(answer['date'].values()):
+    elif 'date' in answer.keys() and any(answer['date'].values()):
         return DATE_ANSWER_TYPE
     else:
         return None

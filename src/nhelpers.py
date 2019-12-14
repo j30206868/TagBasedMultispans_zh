@@ -6,6 +6,167 @@ from word2number.w2n import word_to_num
 from allennlp.nn.util import replace_masked_values
 from itertools import permutations
 
+import pycnnum
+
+import itertools
+
+
+from unicodedata import numeric
+def isAllNumber(chinese):
+    if [numeric(ch) for ch in chinese]:
+        return True
+    return False
+# def chinese2num(s):
+#     amount = 0
+#     digit = 0
+#     for ch in s:
+#         number = numeric(ch)
+#         if number < 10:
+#             digit = number
+#         else:
+#             amount = (amount + digit) * number if number > amount else amount + digit * number         
+#             digit = 0
+#     if len(s) > 1 and numeric(s[-2]) != 0:
+#         return amount + digit * numeric(s[-2]) / 10
+#     return amount + digit
+
+# def num2chinese(num, big=False, simp=True, o=False, twoalt=False):
+#     """
+#     Converts numbers to Chinese representations.
+#     `big`   : use financial characters.
+#     `simp`  : use simplified characters instead of traditional characters.
+#     `o`     : use 〇 for zero.
+#     `twoalt`: use 两/兩 for two when appropriate.
+#     Note that `o` and `twoalt` is ignored when `big` is used, 
+#     and `twoalt` is ignored when `o` is used for formal representations.
+#     """
+#     # check num first
+#     nd = str(num)
+#     if abs(float(nd)) >= 1e48:
+#         raise ValueError('number out of range')
+#     elif 'e' in nd:
+#         raise ValueError('scientific notation is not supported')
+#     c_symbol = '正负点' if simp else '正負點'
+#     if o:  # formal
+#         twoalt = False
+#     if big:
+#         c_basic = '零壹贰叁肆伍陆柒捌玖' if simp else '零壹貳參肆伍陸柒捌玖'
+#         c_unit1 = '拾佰仟'
+#         c_twoalt = '贰' if simp else '貳'
+#     else:
+#         c_basic = '〇一二三四五六七八九' if o else '零一二三四五六七八九'
+#         c_unit1 = '十百千'
+#         if twoalt:
+#             c_twoalt = '两' if simp else '兩'
+#         else:
+#             c_twoalt = '二'
+#     c_unit2 = '万亿兆京垓秭穰沟涧正载' if simp else '萬億兆京垓秭穰溝澗正載'
+#     revuniq = lambda l: ''.join(k for k, g in itertools.groupby(reversed(l)))
+#     nd = str(num)
+#     result = []
+#     if nd[0] == '+':
+#         result.append(c_symbol[0])
+#     elif nd[0] == '-':
+#         result.append(c_symbol[1])
+#     if '.' in nd:
+#         integer, remainder = nd.lstrip('+-').split('.')
+#     else:
+#         integer, remainder = nd.lstrip('+-'), None
+#     if int(integer):
+#         splitted = [integer[max(i - 4, 0):i]
+#                     for i in range(len(integer), 0, -4)]
+#         intresult = []
+#         for nu, unit in enumerate(splitted):
+#             # special cases
+#             if int(unit) == 0:  # 0000
+#                 intresult.append(c_basic[0])
+#                 continue
+#             elif nu > 0 and int(unit) == 2:  # 0002
+#                 intresult.append(c_twoalt + c_unit2[nu - 1])
+#                 continue
+#             ulist = []
+#             unit = unit.zfill(4)
+#             for nc, ch in enumerate(reversed(unit)):
+#                 if ch == '0':
+#                     if ulist:  # ???0
+#                         ulist.append(c_basic[0])
+#                 elif nc == 0:
+#                     ulist.append(c_basic[int(ch)])
+#                 elif nc == 1 and ch == '1' and unit[1] == '0':
+#                     # special case for tens
+#                     # edit the 'elif' if you don't like
+#                     # 十四, 三千零十四, 三千三百一十四
+#                     ulist.append(c_unit1[0])
+#                 elif nc > 1 and ch == '2':
+#                     ulist.append(c_twoalt + c_unit1[nc - 1])
+#                 else:
+#                     ulist.append(c_basic[int(ch)] + c_unit1[nc - 1])
+#             ustr = revuniq(ulist)
+#             if nu == 0:
+#                 intresult.append(ustr)
+#             else:
+#                 intresult.append(ustr + c_unit2[nu - 1])
+#         result.append(revuniq(intresult).strip(c_basic[0]))
+#     else:
+#         result.append(c_basic[0])
+#     if remainder:
+#         result.append(c_symbol[2])
+#         result.append(''.join(c_basic[int(ch)] for ch in remainder))
+#     return ''.join(result)
+
+def get_number_from_word_zh(word, improve_number_extraction):
+    punctuation = string.punctuation.replace('-', '')
+    word = word.strip(punctuation)
+    word = word.replace(",", "")
+    try:
+        number = word_to_num(word)
+    except ValueError:
+        try:
+            number = int(word)
+        except ValueError:
+            try:
+                number = float(word)
+            except ValueError:
+                try:
+                    if isAllNumber(word):
+                        number = pycnnum.cn2num(word)
+                    else:
+                        return None
+                except ValueError:
+                    if improve_number_extraction:
+                        if re.match('^\d*1st$', word):  # ending in '1st'
+                            number = int(word[:-2])
+                        elif re.match('^\d*2nd$', word):  # ending in '2nd'
+                            number = int(word[:-2])
+                        elif re.match('^\d*3rd$', word):  # ending in '3rd'
+                            number = int(word[:-2])
+                        elif re.match('^\d+th$', word):  # ending in <digits>th
+                            # Many occurrences are when referring to centuries (e.g "the *19th* century")
+                            number = int(word[:-2])
+                        elif len(word) > 1 and word[-2] == '0' and re.match('^\d+s$', word):
+                            # Decades, e.g. "1960s".
+                            # Other sequences of digits ending with s (there are 39 of these in the training
+                            # set), do not seem to be arithmetically related, as they are usually proper
+                            # names, like model numbers.
+                            number = int(word[:-1])
+                        elif len(word) > 4 and re.match('^\d+(\.?\d+)?/km[²2]$', word):
+                            # per square kilometer, e.g "73/km²" or "3057.4/km2"
+                            if '.' in word:
+                                number = float(word[:-4])
+                            else:
+                                number = int(word[:-4])
+                        elif len(word) > 6 and re.match('^\d+(\.?\d+)?/month$', word):
+                            # per month, e.g "1050.95/month"
+                            if '.' in word:
+                                number = float(word[:-6])
+                            else:
+                                number = int(word[:-6])
+                        else:
+                            return None
+                    else:
+                        return None
+    return number
+
 
 def get_number_from_word(word, improve_number_extraction):
     punctuation = string.punctuation.replace('-', '')
