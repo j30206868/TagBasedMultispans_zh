@@ -19,7 +19,7 @@ from allennlp.data.fields import (Field, TextField, IndexField, LabelField, List
 from tqdm import tqdm
 
 from src.nhelpers import *
-from src.preprocessing.utils import SPAN_ANSWER_TYPE, SPAN_ANSWER_TYPES, ALL_ANSWER_TYPES, MULTIPLE_SPAN
+from src.preprocessing.utils import SPAN_ANSWER_TYPE, SPAN_ANSWER_TYPES, YESNO_ANSER_TYPE, ALL_ANSWER_TYPES, MULTIPLE_SPAN
 from src.preprocessing.utils import get_answer_type, fill_token_indices, token_to_span, standardize_dataset
 
 @DatasetReader.register("nabert++")
@@ -221,9 +221,8 @@ class NaBertDropReader(DatasetReader):
             qp_tokens = qp_tokens[:self.max_pieces - 1]
             passage_tokens = passage_tokens[:self.max_pieces - qlen - 3]
             plen = len(passage_tokens)
-            if len(number_indices) > 0:
-                number_indices, number_len, numbers_in_passage = \
-                    clipped_passage_num(number_indices, number_len, numbers_in_passage, plen)
+            number_indices, number_len, numbers_in_passage = \
+                clipped_passage_num(number_indices, number_len, numbers_in_passage, plen)
             max_passage_length = token_to_span(passage_tokens[-1])[1] if plen > 0 else 0
         
         qp_tokens += [Token('[SEP]')]
@@ -273,7 +272,12 @@ class NaBertDropReader(DatasetReader):
         if answer_annotations:            
             # Get answer type, answer text, tokenize
             # For multi-span, remove repeating answers. Although possible, in the dataset it is mostly mistakes.
-            answer_type, answer_texts = DropReader.extract_answer_info_from_annotation(answer_annotations[0])
+            if answer_annotations[0]['yesno']:
+                answer_type = YESNO_ANSER_TYPE
+                answer_texts = 'true' if answer_annotations[0]['yesno'] == '1' else 'false'
+            else:
+                answer_type, answer_texts = DropReader.extract_answer_info_from_annotation(answer_annotations[0])
+
             if answer_type == SPAN_ANSWER_TYPE:
                 answer_texts = list(OrderedDict.fromkeys(answer_texts))
             tokenized_answer_texts = []
@@ -364,13 +368,18 @@ class NaBertDropReader(DatasetReader):
             if answer_type in ["number"]:
                 numbers_for_count = list(range(self.max_count + 1))
                 valid_counts = DropReader.find_valid_counts(numbers_for_count, target_numbers)
-            
+
+            valid_yesno: int = -1
+            if answer_type in ["yesno"]:
+                valid_yesno = 1 if answer_texts == 'true' else 0
+
             # Update metadata with answer info
             answer_info = {"answer_passage_spans": valid_passage_spans,
                            "answer_question_spans": valid_question_spans,
                            "expressions": valid_expressions,
                            "counts": valid_counts,
-                           "unit": valid_unit_spans}
+                           "unit": valid_unit_spans,
+                           "yesno": valid_yesno}
 
             metadata["answer_info"] = answer_info
         
@@ -408,8 +417,6 @@ class NaBertDropReader(DatasetReader):
             '''
                 Add unit_field
             '''
-            ## if len(valid_unit_spans) > 1:
-            ##    import pdb; pdb.set_trace()
             unit_span_fields: List[Field] = []
             unit_span_fields: List[Field] = [SpanField(span[0], span[1], qp_field) for span in valid_unit_spans]
             if not unit_span_fields:
@@ -422,6 +429,8 @@ class NaBertDropReader(DatasetReader):
                 count_fields.append(LabelField(-1, skip_indexing=True))
             fields["answer_as_counts"] = ListField(count_fields)
             
+            yesno_field: List[Field] = [LabelField(valid_yesno, skip_indexing=True)]
+            fields["answer_as_yesno"] = ListField(yesno_field)
             
 
             no_answer_bios = SequenceLabelField([0] * len(qp_tokens), sequence_field=qp_field)

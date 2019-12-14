@@ -12,10 +12,11 @@ TRAIN_PATH = os.path.join('data', 'drop_dataset_train.json')
 SPAN_ANSWER_TYPE = 'spans'
 NUMBER_ANSWER_TYPE = 'number'
 DATE_ANSWER_TYPE = 'date'
+YESNO_ANSER_TYPE = 'yesno'
 SINGLE_SPAN = 'single_span'
 MULTIPLE_SPAN = 'multiple_span'
 SPAN_ANSWER_TYPES = [SINGLE_SPAN, MULTIPLE_SPAN]
-ALL_ANSWER_TYPES = SPAN_ANSWER_TYPES + ['number', 'date']
+ALL_ANSWER_TYPES = SPAN_ANSWER_TYPES + ['number', 'date', 'yesno']
 
 
 def load_dataset(path):
@@ -31,6 +32,8 @@ def save_dataset(dataset, path):
 def get_answer_type(answer):
     if answer['number']:
         return NUMBER_ANSWER_TYPE
+    elif answer['yesno']:
+        return YESNO_ANSER_TYPE
     elif answer['spans']:
         if len(answer['spans']) == 1:
             return SINGLE_SPAN

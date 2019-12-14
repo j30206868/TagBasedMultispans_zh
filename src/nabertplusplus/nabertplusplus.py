@@ -44,7 +44,7 @@ class NumericallyAugmentedBERTPlusPlus(Model):
 
         if answering_abilities is None:
             self.answering_abilities = ["passage_span_extraction", "question_span_extraction",
-                                        "arithmetic", "counting", "multiple_spans"]
+                                        "arithmetic", "counting", "multiple_spans", "yesno"]
         else:
             self.answering_abilities = answering_abilities
 
@@ -106,6 +106,9 @@ class NumericallyAugmentedBERTPlusPlus(Model):
             self._multispan_prediction = self.multispan_head.prediction
             self._unique_on_multispan = unique_on_multispan
 
+        if "yesno" in self.answering_abilities:
+            self._yesno_index = self.answering_abilities.index("yesno")
+            self._yesno_predictor = self.ff(bert_dim, bert_dim, 2)
 
         self._drop_metrics = CustomDropEmAndF1()
         initializer(self)
@@ -169,6 +172,7 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                 answer_as_counts: torch.LongTensor = None,
                 answer_as_text_to_disjoint_bios: torch.LongTensor = None,
                 answer_as_list_of_bios: torch.LongTensor = None,
+                answer_as_yesno: torch.LongTensor = None,
                 span_bio_labels: torch.LongTensor = None,
                 bio_wordpiece_mask: torch.LongTensor = None,
                 is_bio_mask: torch.LongTensor = None,
@@ -249,13 +253,16 @@ class NumericallyAugmentedBERTPlusPlus(Model):
             number_mask = (number_indices[:,:,0].long() != -1).long()
             number_sign_log_probs, best_signs_for_numbers, number_mask = \
                 self._base_arithmetic_module(passage_vector, passage_out, number_indices, number_mask)
-            
+
+        if "yesno" in self.answering_abilities:
+            yesno_log_probs, best_yesno = self._yesno_module(passage_vector)
+
         output_dict = {}
         del passage_out, question_out
         # If answer is given, compute the loss.
         if answer_as_passage_spans is not None or answer_as_question_spans is not None \
                 or answer_as_expressions is not None or answer_as_counts is not None \
-                or span_bio_labels is not None:
+                or answer_as_yesno is not None or span_bio_labels is not None:
 
             log_marginal_likelihood_list = []
 
@@ -314,6 +321,11 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                                                         is_bio_mask,
                                                         logits=multispan_logits)
                     log_marginal_likelihood_list.append(log_marginal_likelihood_for_multispan)
+                elif answering_ability == "yesno":
+                    log_marginal_likelihood_for_yesno = \
+                        self._yesno_log_likelihood(answer_as_yesno,
+                                                   yesno_log_probs)
+                    log_marginal_likelihood_list.append(log_marginal_likelihood_for_yesno)
                 else:
                     raise ValueError(f"Unsupported answering ability: {answering_ability}")
 
@@ -357,9 +369,6 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                     qp_tokens = metadata[i]['question_passage_tokens']
 
                     ###
-                    answer_json["unit_value"], answer_json["unit_spans"] = \
-                            self._span_prediction(qp_tokens, best_unit_span[i], p_text, q_text, 'q')
-                    ###
 
                     if predicted_ability_str == "passage_span_extraction":
                         answer_json["answer_type"] = "passage_span"
@@ -375,12 +384,10 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                         original_numbers = metadata[i]['original_numbers']
                         answer_json["value"], answer_json["numbers"] = \
                             self._base_arithmetic_prediction(original_numbers, number_indices[i], best_signs_for_numbers[i])
-                        answer_json["value"] = answer_json["value"]+answer_json["unit_value"]
                     elif predicted_ability_str == "counting":
                         answer_json["answer_type"] = "count"
                         answer_json["value"], answer_json["count"] = \
                             self._count_prediction(best_count_number[i])
-                        answer_json["value"] = answer_json["value"]+answer_json["unit_value"]
                     elif predicted_ability_str == "multiple_spans":
                         answer_json["answer_type"] = "multiple_spans"
                         if self.multispan_head_name == "flexible_loss":
@@ -400,21 +407,28 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                         if len(answer_json["value"]) == 0:
                             best_answer_ability[i] = top_two_answer_abilities.indices[i][1]
                             continue
+                    elif predicted_ability_str == "yesno":
+                        answer_json["answer_type"] = "yesno"
+                        answer_json["value"], answer_json["yesno"] = \
+                            self._yesno_prediction(best_yesno[i])
                     else:
                         raise ValueError(f"Unsupported answer ability: {predicted_ability_str}")
                     
-                    # import pdb; pdb.set_trace()
+                    if predicted_ability_str == "counting" or predicted_ability_str == "arithmetic":
+                        answer_json["unit_value"], answer_json["unit_spans"] = \
+                            self._span_prediction(qp_tokens, best_unit_span[i], p_text, q_text, 'q')
+                        answer_json["value"] = answer_json["value"] + answer_json["unit_value"]
+
                     maximizing_ground_truth = None
                     em, f1 = None, None
                     answer_annotations = metadata[i].get('answer_annotations', [])
 
-                    def addunit2number(answer_annotations):
-                        for answer_annotation in answer_annotations:
-                            answer_annotation['number']+=answer_annotation['unit']
-
                     if answer_annotations:
-                        addunit2number(answer_annotations)
-                        (em, f1), maximizing_ground_truth = self._drop_metrics.call(answer_json["value"], answer_annotations, predicted_ability_str)
+                        (em, f1), maximizing_ground_truth = self._drop_metrics.call(
+                            answer_json["value"],
+                            [dict((key, answer_annotation[key]) if key != 'number' else (key, answer_annotation[key]+answer_annotation['unit']) for key in answer_annotation.keys()) for answer_annotation in answer_annotations], 
+                            predicted_ability_str
+                        )
 
                     if not self.training:
                         output_dict["passage_id"].append(metadata[i]["passage_id"])
@@ -701,3 +715,32 @@ class NumericallyAugmentedBERTPlusPlus(Model):
             metrics[f'_counter_{head}'] = head_count
         
         return metrics
+
+    def _yesno_module(self, passage_vector):
+        # Shape: (batch_size, 3)
+        yesno_logits = self._yesno_predictor(passage_vector)
+        yesno_log_probs = torch.nn.functional.log_softmax(yesno_logits, -1)
+        # Info about the best yesno prediction
+        # Shape: (batch_size,)
+        best_yesno = torch.argmax(yesno_log_probs, -1)
+        return yesno_log_probs, best_yesno
+
+    def _yesno_log_likelihood(self, answer_as_yesno, yesno_log_probs):
+        # Yesno are padded with label -1,
+        # so we clamp those paddings to 0 and then mask after `torch.gather()`.
+        # Shape: (batch_size, # of yesno answers)
+        gold_yesno_mask = (answer_as_yesno != -1).long()
+        # Shape: (batch_size, # of yesno answers)
+        clamped_gold_yesno = util.replace_masked_values(answer_as_yesno, gold_yesno_mask, 0)
+        log_likelihood_for_yesno = torch.gather(yesno_log_probs, 1, clamped_gold_yesno)
+        # For those padded spans, we set their log probabilities to be very small negative value
+        log_likelihood_for_yesno = \
+            util.replace_masked_values(log_likelihood_for_yesno, gold_yesno_mask, -1e7)
+        # Shape: (batch_size, )
+        log_marginal_likelihood_for_yesno = util.logsumexp(log_likelihood_for_yesno)
+        return log_marginal_likelihood_for_yesno
+
+    def _yesno_prediction(self, best_yesno):
+        predicted_yesno = best_yesno.detach().cpu().numpy()
+        predicted_answer = str(predicted_yesno)
+        return predicted_answer, predicted_yesno

@@ -41,7 +41,15 @@ class CustomDropEmAndF1(Metric):
     def call(self, prediction: Union[str, List], ground_truths: List, predicted_ability: str) -> Union[str, List]:
         # If you wanted to split this out by answer type, you could look at [1] here and group by
         # that, instead of only keeping [0].
-        ground_truth_answer_strings, ground_truth_answer_types = list(zip(*[answer_json_to_strings(annotation) for annotation in ground_truths]))
+        gold_answers = []
+        for annotation in ground_truths:
+            if 'yesno' in annotation and annotation['yesno']:
+                gold_answer = tuple([str(annotation['yesno'])]), 'yesno'
+            else:
+                gold_answer = answer_json_to_strings(annotation)
+            gold_answers.append(gold_answer)
+
+        ground_truth_answer_strings, ground_truth_answer_types = list(zip(*gold_answers))
         (exact_match, f1_score), maximizing_ground_truth_index = CustomDropEmAndF1.metric_max_over_ground_truths(
                 drop_em_and_f1,
                 prediction,
