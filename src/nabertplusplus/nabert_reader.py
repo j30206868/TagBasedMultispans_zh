@@ -22,6 +22,8 @@ from src.nhelpers import *
 from src.preprocessing.utils import SPAN_ANSWER_TYPE, SPAN_ANSWER_TYPES, YESNO_ANSER_TYPE, ALL_ANSWER_TYPES, MULTIPLE_SPAN
 from src.preprocessing.utils import get_answer_type, fill_token_indices, token_to_span, standardize_dataset
 
+QUESTION_INDEXES = ['{}. '.format(idx) for idx in range(1, 100)]
+
 @DatasetReader.register("nabert++")
 class NaBertDropReader(DatasetReader):
     def __init__(self,
@@ -153,6 +155,9 @@ class NaBertDropReader(DatasetReader):
 
                 question_id = qa_pair["query_id"]
                 question_text = qa_pair["question"].strip()
+                for q_idx in QUESTION_INDEXES:
+                    if question_text.startswith(q_idx):
+                        question_text = question_text[len(q_idx):]
                 
                 answer_annotations: List[Dict] = list()
                 specific_answer_type = None
