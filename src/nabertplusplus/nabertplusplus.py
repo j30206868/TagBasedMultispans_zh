@@ -32,6 +32,7 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                  regularizer: Optional[RegularizerApplicator] = None,
                  answering_abilities: List[str] = None,
                  special_numbers: List[int] = None,
+                 fit_zh_format: bool = False,
                  round_predicted_numbers: bool = True,
                  unique_on_multispan: bool = True,
                  multispan_head_name: str = "flexible_loss",
@@ -53,6 +54,8 @@ class NumericallyAugmentedBERTPlusPlus(Model):
         
         self.dropout = dropout_prob
         self._dont_add_substrings_to_ms = dont_add_substrings_to_ms
+
+        self.fit_zh_format = fit_zh_format
 
         self.round_predicted_numbers = round_predicted_numbers
         self.multispan_head_name = multispan_head_name
@@ -407,10 +410,24 @@ class NumericallyAugmentedBERTPlusPlus(Model):
                         if len(answer_json["value"]) == 0:
                             best_answer_ability[i] = top_two_answer_abilities.indices[i][1]
                             continue
+
+                        if self.fit_zh_format:
+                            if len(answer_json["value"]) == 1:
+                                answer_json["value"] = answer_json["value"][0]
+                            elif len(answer_json["value"]) == 2:
+                                answer_json["value"] = "{}與{}".format(answer_json["value"][0],
+                                                                       answer_json["value"][1])
+                            else:
+                                for idx in range(len(answer_json["value"]) - 2):
+                                    answer_json["value"][idx] += "、"
+                                answer_json["value"][-2] += "與"
+                                answer_json["value"] = "".join(answer_json["value"])
                     elif predicted_ability_str == "yesno":
                         answer_json["answer_type"] = "yesno"
                         answer_json["value"], answer_json["yesno"] = \
                             self._yesno_prediction(best_yesno[i])
+                        if self.fit_zh_format:
+                            answer_json["value"] = "是" if answer_json["value"] == "1" else "否"
                     else:
                         raise ValueError(f"Unsupported answer ability: {predicted_ability_str}")
                     
